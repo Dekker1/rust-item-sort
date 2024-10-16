@@ -414,14 +414,13 @@ impl<'a> Module<'a> {
 		}
 		for window in self.items.windows(2) {
 			if window[0].1 > window[1].1 {
-				// eprintln!("{:?} {:?}", window[0].1, window[1].1);
 				if print_diff {
 					eprintln!(
 						"Expected \n\"\"\"\n{}\n\"\"\"\n before \n\"\"\"\n{}\n\"\"\"",
 						window[1].1, window[0].1
 					);
-					return false;
 				}
+				return false;
 			}
 		}
 		true
