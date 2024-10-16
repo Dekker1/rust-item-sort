@@ -502,11 +502,6 @@ impl<'a> TypeIdent<'a> {
 		};
 
 		match node.kind() {
-			"type_identifier" => Self {
-				name: node.utf8_text(text.as_bytes()).unwrap(),
-				generics: None,
-				reference_type: None,
-			},
 			"generic_type" => {
 				let name = get_field_str("type").unwrap();
 				let generics = get_field_str("type_arguments");
@@ -526,7 +521,16 @@ impl<'a> TypeIdent<'a> {
 				ty.reference_type = Some(reference_str);
 				ty
 			}
-			_ => panic!("invalid type identifier node: {}", node.kind()),
+			"type_identifier" | "primitive_type" => Self {
+				name: node.utf8_text(text.as_bytes()).unwrap(),
+				generics: None,
+				reference_type: None,
+			},
+			_ => panic!(
+				"invalid type identifier node: {}, `{}'",
+				node.kind(),
+				node.utf8_text(text.as_bytes()).unwrap()
+			),
 		}
 	}
 }
