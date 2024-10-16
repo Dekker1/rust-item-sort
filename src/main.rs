@@ -26,6 +26,10 @@ struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Item<'a> {
 	InnerDoc(Cow<'a, str>),
+	Macro {
+		name: &'a str,
+		content: Cow<'a, str>,
+	},
 	ModDecl {
 		name: &'a str,
 		content: Cow<'a, str>,
@@ -48,6 +52,7 @@ enum Item<'a> {
 		trt: Option<&'a str>,
 		content: SortableContent<'a>,
 	},
+	MacroInvocation(Cow<'a, str>),
 	Mod {
 		name: &'a str,
 		content: SortableContent<'a>,
@@ -70,6 +75,7 @@ struct SortableContent<'a> {
 struct TypeIdent<'a> {
 	name: &'a str,
 	generics: Option<&'a str>,
+	reference_type: Option<&'a str>,
 }
 
 fn main() -> ExitCode {
@@ -100,7 +106,7 @@ impl Cli {
 	fn run(&self) -> Result<ExitCode, String> {
 		let mut parser = Parser::new();
 		parser
-			.set_language(&tree_sitter_rust::language())
+			.set_language(&tree_sitter_rust::LANGUAGE.into())
 			.expect("Error loading Rust grammar");
 
 		let text = std::fs::read_to_string(&self.path)
@@ -172,16 +178,36 @@ impl TryFrom<Arguments> for Cli {
 }
 
 impl<'a> Item<'a> {
+	fn append_content(&mut self, text: &str) {
+		match self {
+			Item::Macro { content, .. }
+			| Item::ModDecl { content, .. }
+			| Item::Const { content, .. }
+			| Item::Type { content, .. }
+			| Item::Func { content, .. }
+			| Item::InnerDoc(content)
+			| Item::Use(content)
+			| Item::MacroInvocation(content) => {
+				*content = Cow::Owned(format!("{}{}", content, text));
+			}
+			Item::Impl { .. } | Item::Mod { .. } => {
+				// Cannot add content to these items
+			}
+		}
+	}
+
 	fn item_order(&self) -> u8 {
 		match self {
 			Item::InnerDoc(_) => 0,
-			Item::ModDecl { .. } => 1,
-			Item::Use(_) => 2,
-			Item::Const { .. } => 3,
-			Item::Type { .. } => 4,
-			Item::Func { .. } => 5,
-			Item::Impl { .. } => 6,
-			Item::Mod { .. } => 7,
+			Item::Macro { .. } => 1,
+			Item::ModDecl { .. } => 2,
+			Item::Use(_) => 3,
+			Item::Const { .. } => 4,
+			Item::Type { .. } => 5,
+			Item::Func { .. } => 6,
+			Item::Impl { .. } => 7,
+			Item::MacroInvocation(_) => 8,
+			Item::Mod { .. } => 9,
 		}
 	}
 
@@ -211,7 +237,7 @@ impl<'a> Item<'a> {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Const { name, content })
 			}
-			"enum_item" | "struct_item" => {
+			"enum_item" | "struct_item" | "trait_item" | "type_item" => {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Type { name, content })
 			}
@@ -225,6 +251,11 @@ impl<'a> Item<'a> {
 				let content = SortableContent::within_node(text, node, Some(start), "body");
 				Some(Self::Impl { name, trt, content })
 			}
+			"macro_definition" => {
+				let name = get_field_str("name").unwrap();
+				Some(Self::Macro { name, content })
+			}
+			"macro_invocation" => Some(Self::MacroInvocation(content)),
 			"mod_item" => {
 				let name = get_field_str("name").unwrap();
 				if node.child_by_field_name("body").is_some() {
@@ -235,7 +266,11 @@ impl<'a> Item<'a> {
 				}
 			}
 			"use_declaration" => Some(Self::Use(content)),
-			_ => panic!("unexpected node kind: {}", node.kind()),
+			_ => panic!(
+				"unexpected node kind: {}\ncontent: {}",
+				node.kind(),
+				content
+			),
 		}
 	}
 }
@@ -244,6 +279,8 @@ impl Display for Item<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Item::InnerDoc(content)
+			| Item::Macro { content, .. }
+			| Item::MacroInvocation(content)
 			| Item::ModDecl { content, .. }
 			| Item::Use(content)
 			| Item::Const { content, .. }
@@ -266,10 +303,14 @@ impl Ord for Item<'_> {
 		match (self, other) {
 			(Item::InnerDoc(_), Item::InnerDoc(_)) => Ordering::Equal,
 			(Item::Const { name: a, .. }, Item::Const { name: b, .. })
+			| (Item::Macro { name: a, .. }, Item::Macro { name: b, .. })
 			| (Item::Mod { name: a, .. }, Item::Mod { name: b, .. })
+			| (Item::ModDecl { name: a, .. }, Item::ModDecl { name: b, .. })
 			| (Item::Type { name: a, .. }, Item::Type { name: b, .. })
 			| (Item::Func { name: a, .. }, Item::Func { name: b, .. }) => a.cmp(b),
-			(Item::Use(_), Item::Use(_)) => Ordering::Equal,
+			(Item::Use(_), Item::Use(_)) | (Item::MacroInvocation(_), Item::MacroInvocation(_)) => {
+				Ordering::Equal
+			}
 			(
 				Item::Impl {
 					name: a, trt: t_a, ..
@@ -282,7 +323,9 @@ impl Ord for Item<'_> {
 				if name_order == Ordering::Equal {
 					let trt_order = t_a.unwrap_or("").cmp(t_b.unwrap_or(""));
 					if trt_order == Ordering::Equal {
-						a.generics.unwrap_or("").cmp(&b.generics.unwrap_or(""))
+						let a_parts = (a.generics.unwrap_or(""), a.reference_type.unwrap_or(""));
+						let b_parts = (b.generics.unwrap_or(""), b.reference_type.unwrap_or(""));
+						a_parts.cmp(&b_parts)
 					} else {
 						trt_order
 					}
@@ -290,7 +333,10 @@ impl Ord for Item<'_> {
 					name_order
 				}
 			}
-			_ => unreachable!(),
+			_ => {
+				// eprintln!("{} -- {}", self, other);
+				unreachable!();
+			}
 		}
 	}
 }
@@ -307,7 +353,7 @@ impl<'a> Module<'a> {
 		let mut cursor = root.walk();
 		cursor.goto_first_child();
 
-		let mut items = Vec::new();
+		let mut items: Vec<(bool, Item)> = Vec::new();
 		let mut start = None;
 		let mut last = None;
 		if cursor.node().kind() == "{" {
@@ -315,11 +361,26 @@ impl<'a> Module<'a> {
 			cursor.goto_next_sibling();
 		}
 		loop {
+			if cursor.node().kind() == "}" {
+				assert!(!cursor.goto_next_sibling());
+				break;
+			}
 			let node = cursor.node();
-			// println!("{} : {}\n\n", node.kind(), node.to_sexp());
-			if let Some(item) = Item::maybe_item(&text, node, start) {
-				let inbetween =
-					&text[last.unwrap_or(root.start_byte())..start.unwrap_or(node.start_byte())];
+			// eprintln!("{} : {}\n\n", node.kind(), node.to_sexp());
+			let inbetween =
+				&text[last.unwrap_or(root.start_byte())..start.unwrap_or(node.start_byte())];
+			if node.kind() == "empty_statement" {
+				if let Some((_, it)) = items.last_mut() {
+					it.append_content(";");
+				}
+				debug_assert!(
+					inbetween.trim().is_empty(),
+					"unexpected skipped content: {:?}",
+					inbetween
+				);
+				start = None;
+				last = Some(node.end_byte());
+			} else if let Some(item) = Item::maybe_item(&text, node, start) {
 				debug_assert!(
 					inbetween.trim().is_empty(),
 					"unexpected skipped content: {:?}",
@@ -333,10 +394,6 @@ impl<'a> Module<'a> {
 				start = Some(node.start_byte());
 			}
 			if !cursor.goto_next_sibling() {
-				break;
-			}
-			if cursor.node().kind() == "}" {
-				assert!(!cursor.goto_next_sibling());
 				break;
 			}
 		}
@@ -356,7 +413,8 @@ impl<'a> Module<'a> {
 			}
 		}
 		for window in self.items.windows(2) {
-			if window[0] > window[1] {
+			if window[0].1 > window[1].1 {
+				// eprintln!("{:?} {:?}", window[0].1, window[1].1);
 				if print_diff {
 					eprintln!(
 						"Expected \n\"\"\"\n{}\n\"\"\"\n before \n\"\"\"\n{}\n\"\"\"",
@@ -448,12 +506,26 @@ impl<'a> TypeIdent<'a> {
 			"type_identifier" => Self {
 				name: node.utf8_text(text.as_bytes()).unwrap(),
 				generics: None,
+				reference_type: None,
 			},
 			"generic_type" => {
 				let name = get_field_str("type").unwrap();
 				let generics = get_field_str("type_arguments");
 				debug_assert!(generics.is_some());
-				Self { name, generics }
+				Self {
+					name,
+					generics,
+					reference_type: None,
+				}
+			}
+			"reference_type" => {
+				let inner = node.child_by_field_name("type").unwrap();
+				let mut ty = TypeIdent::from_node(text, inner);
+				let reference_str =
+					std::str::from_utf8(&text.as_bytes()[node.start_byte()..inner.start_byte()])
+						.unwrap();
+				ty.reference_type = Some(reference_str);
+				ty
 			}
 			_ => panic!("invalid type identifier node: {}", node.kind()),
 		}
