@@ -218,7 +218,12 @@ impl<'a> Item<'a> {
 		};
 
 		let start = start.unwrap_or(node.start_byte());
-		let content: Cow<'a, str> = Cow::Borrowed(&text[start..node.end_byte()]);
+		let end = if node.utf8_text(&text.as_bytes()).unwrap().ends_with('\n') {
+			node.end_byte() - 1
+		} else {
+			node.end_byte()
+		};
+		let content: Cow<'a, str> = Cow::Borrowed(&text[start..end]);
 		match node.kind() {
 			"attribute_item" => {
 				// Ignore and add to the next item
@@ -441,7 +446,7 @@ impl Display for Module<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let mut last = None;
 		for (newline, item) in &self.items {
-			if *newline || last != Some(item.item_order()) {
+			if *newline || (last.is_some() && last != Some(item.item_order())) {
 				writeln!(f)?;
 			}
 			writeln!(f, "{}", item)?;
