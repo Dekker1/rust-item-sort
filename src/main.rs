@@ -256,6 +256,11 @@ impl<'a> Item<'a> {
 				let content = SortableContent::within_node(text, node, Some(start), "body");
 				Some(Self::Impl { name, trt, content })
 			}
+			"inner_attribute_item" => {
+				// Should be at the top (treat like inner doc, to keep it in the chosen
+				// order compared to the module documentation).
+				Some(Self::InnerDoc(content))
+			}
 			"macro_definition" => {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Macro { name, content })
