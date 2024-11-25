@@ -512,6 +512,15 @@ impl<'a> TypeIdent<'a> {
 		};
 
 		match node.kind() {
+			"array_type" => {
+				let inner = node.child_by_field_name("element").unwrap();
+				let mut ty = TypeIdent::from_node(text, inner);
+				let reference_str =
+					std::str::from_utf8(&text.as_bytes()[node.start_byte()..inner.start_byte()])
+						.unwrap();
+				ty.reference_type = Some(reference_str);
+				ty
+			}
 			"generic_type" => {
 				let name = get_field_str("type").unwrap();
 				let generics = get_field_str("type_arguments");
