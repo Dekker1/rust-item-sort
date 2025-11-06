@@ -47,6 +47,10 @@ enum Item<'a> {
 		name: &'a str,
 		content: Cow<'a, str>,
 	},
+	Trait {
+		name: &'a str,
+		content: SortableContent<'a>,
+	},
 	Impl {
 		name: TypeIdent<'a>,
 		trt: Option<&'a str>,
@@ -190,7 +194,7 @@ impl<'a> Item<'a> {
 			| Item::MacroInvocation(content) => {
 				*content = Cow::Owned(format!("{}{}", content, text));
 			}
-			Item::Impl { .. } | Item::Mod { .. } => {
+			Item::Impl { .. } | Item::Mod { .. } | Item::Trait { .. } => {
 				// Cannot add content to these items
 			}
 		}
@@ -204,6 +208,7 @@ impl<'a> Item<'a> {
 			Item::Use(_) => 3,
 			Item::Const { .. } => 4,
 			Item::Type { .. } => 5,
+			Item::Trait { .. } => 5,
 			Item::Func { .. } => 6,
 			Item::Impl { .. } => 7,
 			Item::MacroInvocation(_) => 8,
@@ -218,7 +223,7 @@ impl<'a> Item<'a> {
 		};
 
 		let start = start.unwrap_or(node.start_byte());
-		let end = if node.utf8_text(&text.as_bytes()).unwrap().ends_with('\n') {
+		let end = if node.utf8_text(text.as_bytes()).unwrap().ends_with('\n') {
 			node.end_byte() - 1
 		} else {
 			node.end_byte()
@@ -238,17 +243,22 @@ impl<'a> Item<'a> {
 					None // Move comment with the next item
 				}
 			}
-			"const_item" => {
+			"const_item" | "static_item" => {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Const { name, content })
 			}
-			"enum_item" | "struct_item" | "trait_item" | "type_item" => {
+			"associated_type" | "enum_item" | "struct_item" | "type_item" => {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Type { name, content })
 			}
-			"function_item" => {
+			"function_item" | "function_signature_item" => {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Func { name, content })
+			}
+			"trait_item" => {
+				let name = get_field_str("name").unwrap();
+				let content = SortableContent::within_node(text, node, Some(start), "body");
+				Some(Self::Trait { name, content })
 			}
 			"impl_item" => {
 				let name = TypeIdent::from_node(text, node.child_by_field_name("type").unwrap());
@@ -296,7 +306,9 @@ impl Display for Item<'_> {
 			| Item::Const { content, .. }
 			| Item::Type { content, .. }
 			| Item::Func { content, .. } => write!(f, "{content}"),
-			Item::Mod { content, .. } | Item::Impl { content, .. } => {
+			Item::Mod { content, .. }
+			| Item::Impl { content, .. }
+			| Item::Trait { content, .. } => {
 				write!(f, "{content}")
 			}
 		}
@@ -305,27 +317,30 @@ impl Display for Item<'_> {
 
 impl Ord for Item<'_> {
 	fn cmp(&self, other: &Self) -> Ordering {
+		use Item::*;
+
 		let self_order = self.item_order();
 		let other_order = other.item_order();
 		if self_order != other_order {
 			return self_order.cmp(&other_order);
 		}
 		match (self, other) {
-			(Item::InnerDoc(_), Item::InnerDoc(_)) => Ordering::Equal,
-			(Item::Const { name: a, .. }, Item::Const { name: b, .. })
-			| (Item::Macro { name: a, .. }, Item::Macro { name: b, .. })
-			| (Item::Mod { name: a, .. }, Item::Mod { name: b, .. })
-			| (Item::ModDecl { name: a, .. }, Item::ModDecl { name: b, .. })
-			| (Item::Type { name: a, .. }, Item::Type { name: b, .. })
-			| (Item::Func { name: a, .. }, Item::Func { name: b, .. }) => a.cmp(b),
-			(Item::Use(_), Item::Use(_)) | (Item::MacroInvocation(_), Item::MacroInvocation(_)) => {
-				Ordering::Equal
-			}
+			(InnerDoc(_), InnerDoc(_)) => Ordering::Equal,
+			(Const { name: a, .. }, Const { name: b, .. })
+			| (Macro { name: a, .. }, Macro { name: b, .. })
+			| (Mod { name: a, .. }, Mod { name: b, .. })
+			| (ModDecl { name: a, .. }, ModDecl { name: b, .. })
+			| (
+				Type { name: a, .. } | Trait { name: a, .. },
+				Type { name: b, .. } | Trait { name: b, .. },
+			)
+			| (Func { name: a, .. }, Func { name: b, .. }) => a.cmp(b),
+			(Use(_), Use(_)) | (MacroInvocation(_), MacroInvocation(_)) => Ordering::Equal,
 			(
-				Item::Impl {
+				Impl {
 					name: a, trt: t_a, ..
 				},
-				Item::Impl {
+				Impl {
 					name: b, trt: t_b, ..
 				},
 			) => {
@@ -390,14 +405,14 @@ impl<'a> Module<'a> {
 				);
 				start = None;
 				last = Some(node.end_byte());
-			} else if let Some(item) = Item::maybe_item(&text, node, start) {
+			} else if let Some(item) = Item::maybe_item(text, node, start) {
 				debug_assert!(
 					inbetween.trim().is_empty(),
 					"unexpected skipped content: {:?}",
 					inbetween
 				);
 				let newline_before = inbetween.contains("\n\n");
-				items.push((newline_before, item));
+				items.push((items.is_empty() || newline_before, item));
 				start = None;
 				last = Some(node.end_byte());
 			} else if start.is_none() {
@@ -414,7 +429,9 @@ impl<'a> Module<'a> {
 	pub fn is_sorted(&self, print_diff: bool) -> bool {
 		for it in &self.items {
 			match &it.1 {
-				Item::Mod { content, .. } | Item::Impl { content, .. } => {
+				Item::Mod { content, .. }
+				| Item::Impl { content, .. }
+				| Item::Trait { content, .. } => {
 					if !content.is_sorted(print_diff) {
 						return false;
 					}
@@ -439,7 +456,9 @@ impl<'a> Module<'a> {
 	pub fn sort(&mut self) {
 		for it in self.items.iter_mut() {
 			match &mut it.1 {
-				Item::Mod { content, .. } | Item::Impl { content, .. } => content.sort(),
+				Item::Mod { content, .. }
+				| Item::Impl { content, .. }
+				| Item::Trait { content, .. } => content.sort(),
 				_ => {}
 			}
 		}
@@ -515,9 +534,7 @@ impl<'a> TypeIdent<'a> {
 			"array_type" => {
 				let inner = node.child_by_field_name("element").unwrap();
 				let mut ty = TypeIdent::from_node(text, inner);
-				let reference_str =
-					std::str::from_utf8(&text.as_bytes()[node.start_byte()..inner.start_byte()])
-						.unwrap();
+				let reference_str = &text[node.start_byte()..inner.start_byte()];
 				ty.reference_type = Some(reference_str);
 				ty
 			}
@@ -534,13 +551,11 @@ impl<'a> TypeIdent<'a> {
 			"reference_type" => {
 				let inner = node.child_by_field_name("type").unwrap();
 				let mut ty = TypeIdent::from_node(text, inner);
-				let reference_str =
-					std::str::from_utf8(&text.as_bytes()[node.start_byte()..inner.start_byte()])
-						.unwrap();
+				let reference_str = &text[node.start_byte()..inner.start_byte()];
 				ty.reference_type = Some(reference_str);
 				ty
 			}
-			"type_identifier" | "primitive_type" => Self {
+			"type_identifier" | "primitive_type" | "bounded_type" => Self {
 				name: node.utf8_text(text.as_bytes()).unwrap(),
 				generics: None,
 				reference_type: None,
