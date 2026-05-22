@@ -555,11 +555,13 @@ impl<'a> TypeIdent<'a> {
 				ty.reference_type = Some(reference_str);
 				ty
 			}
-			"type_identifier" | "primitive_type" | "bounded_type" => Self {
-				name: node.utf8_text(text.as_bytes()).unwrap(),
-				generics: None,
-				reference_type: None,
-			},
+			"type_identifier" | "scoped_type_identifier" | "primitive_type" | "bounded_type" => {
+				Self {
+					name: node.utf8_text(text.as_bytes()).unwrap(),
+					generics: None,
+					reference_type: None,
+				}
+			}
 			_ => panic!(
 				"invalid type identifier node: {}, `{}'",
 				node.kind(),
