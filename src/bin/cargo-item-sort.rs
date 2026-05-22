@@ -12,7 +12,7 @@ use std::{
 
 use cargo_metadata::Edition;
 use clap::{CommandFactory, Parser};
-use rust_item_sort::{item_sort_roots, ExecutionMode};
+use rust_item_sort::{ExecutionMode, item_sort_roots};
 
 const FAILURE: i32 = 1;
 
@@ -200,12 +200,11 @@ fn execute() -> i32 {
 			rustfmt_args.push(check_flag.to_owned());
 		}
 	}
-	if let Some(message_format) = opts.message_format {
-		if let Err(msg) = convert_message_format_to_rustfmt_args(&message_format, &mut rustfmt_args)
-		{
-			print_usage_to_stderr(&msg);
-			return FAILURE;
-		}
+	if let Some(message_format) = opts.message_format
+		&& let Err(msg) = convert_message_format_to_rustfmt_args(&message_format, &mut rustfmt_args)
+	{
+		print_usage_to_stderr(&msg);
+		return FAILURE;
 	}
 
 	let manifest_path = if let Some(specified_manifest_path) = opts.manifest_path {
@@ -242,18 +241,15 @@ fn format_crate(
 		ExecutionMode::Write
 	};
 	let roots = targets.iter().map(|t| t.path.clone()).collect::<Vec<_>>();
-	let changed =
-		item_sort_roots(roots, mode).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+	let changed = item_sort_roots(roots, mode).map_err(io::Error::other)?;
 
-	if check {
-		if !changed.is_empty() {
-			if verbosity != Verbosity::Quiet {
-				for path in &changed {
-					eprintln!("would item-sort: {}", path.display());
-				}
+	if check && !changed.is_empty() {
+		if verbosity != Verbosity::Quiet {
+			for path in &changed {
+				eprintln!("would item-sort: {}", path.display());
 			}
-			return Ok(FAILURE);
 		}
+		return Ok(FAILURE);
 	}
 
 	run_rustfmt(&targets, &rustfmt_args, verbosity)
@@ -273,7 +269,7 @@ fn get_cargo_metadata(manifest_path: Option<&Path>) -> Result<cargo_metadata::Me
 			cmd.other_options(vec![]);
 			match cmd.exec() {
 				Ok(metadata) => Ok(metadata),
-				Err(error) => Err(io::Error::new(io::ErrorKind::Other, error.to_string())),
+				Err(error) => Err(io::Error::other(error.to_string())),
 			}
 		}
 	}
@@ -285,10 +281,9 @@ fn get_rustfmt_info(args: &[String]) -> Result<i32, io::Error> {
 		.args(args)
 		.spawn()
 		.map_err(|e| match e.kind() {
-			io::ErrorKind::NotFound => io::Error::new(
-				io::ErrorKind::Other,
-				"Could not run rustfmt, please make sure it is in your PATH.",
-			),
+			io::ErrorKind::NotFound => {
+				io::Error::other("Could not run rustfmt, please make sure it is in your PATH.")
+			}
 			_ => e,
 		})?;
 	let result = command.wait()?;
@@ -316,10 +311,7 @@ fn get_targets(
 	}
 
 	if targets.is_empty() {
-		Err(io::Error::new(
-			io::ErrorKind::Other,
-			"Failed to find targets".to_owned(),
-		))
+		Err(io::Error::other("Failed to find targets".to_owned()))
 	} else {
 		Ok(targets)
 	}
@@ -363,10 +355,7 @@ fn get_targets_root_only(
 	let workspace_root_path = PathBuf::from(&metadata.workspace_root).canonicalize()?;
 	let (in_workspace_root, current_dir_manifest) = if let Some(target_manifest) = manifest_path {
 		let manifest = target_manifest.canonicalize()?;
-		(
-			workspace_root_path.join("Cargo.toml") == manifest,
-			manifest,
-		)
+		(workspace_root_path.join("Cargo.toml") == manifest, manifest)
 	} else {
 		let current_dir = env::current_dir()?.canonicalize()?;
 		(
@@ -496,10 +485,9 @@ fn run_rustfmt(
 			.args(fmt_args)
 			.spawn()
 			.map_err(|e| match e.kind() {
-				io::ErrorKind::NotFound => io::Error::new(
-					io::ErrorKind::Other,
-					"Could not run rustfmt, please make sure it is in your PATH.",
-				),
+				io::ErrorKind::NotFound => {
+					io::Error::other("Could not run rustfmt, please make sure it is in your PATH.")
+				}
 				_ => e,
 			})?;
 
@@ -581,6 +569,6 @@ impl PartialEq for Target {
 
 impl PartialOrd for Target {
 	fn partial_cmp(&self, other: &Target) -> Option<Ordering> {
-		Some(self.path.cmp(&other.path))
+		Some(self.cmp(other))
 	}
 }

@@ -3,7 +3,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use rust_item_sort::{item_sort_roots, item_sort_str, ExecutionMode};
+use rust_item_sort::{ExecutionMode, item_sort_roots, item_sort_str};
 
 #[derive(Parser, Debug, Clone)]
 #[command(

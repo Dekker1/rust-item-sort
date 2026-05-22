@@ -191,24 +191,20 @@ fn collect_module_files(
 					pending_path_attr = Some(p);
 				}
 			}
-			"mod_item" => {
-				// Only follow out-of-line modules (no body)
-				if node.child_by_field_name("body").is_none() {
-					let name = node
-						.child_by_field_name("name")
-						.and_then(|n| n.utf8_text(input.as_bytes()).ok());
-					if let Some(name) = name {
-						let candidate = if let Some(rel) = pending_path_attr.take() {
-							dir.join(rel)
-						} else {
-							let a = dir.join(format!("{name}.rs"));
-							let b = dir.join(name).join("mod.rs");
-							if a.exists() { a } else { b }
-						};
-						out.push(candidate);
-					}
-				} else {
-					pending_path_attr = None;
+			// Only follow out-of-line modules (no body)
+			"mod_item" if node.child_by_field_name("body").is_none() => {
+				let name = node
+					.child_by_field_name("name")
+					.and_then(|n| n.utf8_text(input.as_bytes()).ok());
+				if let Some(name) = name {
+					let candidate = if let Some(rel) = pending_path_attr.take() {
+						dir.join(rel)
+					} else {
+						let a = dir.join(format!("{name}.rs"));
+						let b = dir.join(name).join("mod.rs");
+						if a.exists() { a } else { b }
+					};
+					out.push(candidate);
 				}
 			}
 			_ => {
@@ -597,7 +593,10 @@ impl<'a> Module<'a> {
 					// so they stay on their own line and are not reflowed by rustfmt.
 					if !tail.trim().is_empty() {
 						let newline_before = has_blank_line(tail);
-						items.push((items.is_empty() || newline_before, Item::Trailing(Cow::Borrowed(tail))));
+						items.push((
+							items.is_empty() || newline_before,
+							Item::Trailing(Cow::Borrowed(tail)),
+						));
 					} else if let Some((_, it)) = items.last_mut() {
 						it.append_content(tail);
 					}
@@ -643,7 +642,10 @@ impl<'a> Module<'a> {
 			let tail = &text[start..root.end_byte()];
 			if !tail.trim().is_empty() {
 				let newline_before = has_blank_line(tail);
-				items.push((items.is_empty() || newline_before, Item::Trailing(Cow::Borrowed(tail))));
+				items.push((
+					items.is_empty() || newline_before,
+					Item::Trailing(Cow::Borrowed(tail)),
+				));
 			} else if let Some((_, it)) = items.last_mut() {
 				it.append_content(tail);
 			}
