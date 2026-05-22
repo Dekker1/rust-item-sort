@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/Dekker1/rust-item-sort"
 readme = "README.md"
 keywords = ["rustfmt", "formatter", "sorting", "organize"]
-categories = ["development-tools", "development-tools::cargo-plugins", "development-tools::formatters"]
+categories = ["development-tools", "development-tools::cargo-plugins"]
 autobins = false
 
 [dependencies]
