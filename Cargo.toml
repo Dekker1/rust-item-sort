@@ -1,17 +1,22 @@
 [package]
 name = "rust-item-sort"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "A tool (and cargo subcommand) to sort/reorder Rust items in an opinionated way."
 authors = ["Jip J. Dekker <jip@dekker.one>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Dekker1/rust-item-sort"
+readme = "README.md"
+keywords = ["rustfmt", "formatter", "sorting", "organize"]
+categories = ["development-tools", "development-tools::cargo-plugins", "development-tools::formatters"]
 autobins = false
 
 [dependencies]
-# Organizer core
+# item-sort core
 tree-sitter = "0.26.9"
 tree-sitter-rust = "0.24.2"
 
-# cargo-organize-fmt (cargo subcommand)
+# cargo item-sort (cargo subcommand)
 cargo_metadata = "0.23"
 clap = { version = "4.5", features = ["derive"] }
 clap-cargo = "0.18"
@@ -23,6 +28,3 @@ path = "src/bin/rust-item-sort.rs"
 [[bin]]
 name = "cargo-item-sort"
 path = "src/bin/cargo-item-sort.rs"
-
-[build-dependencies]
-cc = "*"

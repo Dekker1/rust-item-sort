@@ -270,7 +270,6 @@ name = "rust-item-sort"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata",
- "cc",
  "clap",
  "clap-cargo",
  "tree-sitter",
