@@ -220,6 +220,25 @@ fn collect_module_files(
 	out
 }
 
+/// True if the string contains a blank line, where the middle line may contain whitespace.
+fn has_blank_line(s: &str) -> bool {
+	let bytes = s.as_bytes();
+	let mut i = 0;
+	while i < bytes.len() {
+		if bytes[i] == b'\n' {
+			let mut j = i + 1;
+			while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
+				j += 1;
+			}
+			if j < bytes.len() && bytes[j] == b'\n' {
+				return true;
+			}
+		}
+		i += 1;
+	}
+	false
+}
+
 /// Sort a single Rust source file on disk.
 ///
 /// Returns `Ok(changed)`.
@@ -329,6 +348,19 @@ pub fn item_sort_str(input: &str) -> Result<String, String> {
 	let mut root = Module::from_node(input, root);
 	root.sort();
 	Ok(root.to_string())
+}
+
+/// Like `node.end_byte()`, but if the node's text ends with `\n`, return `end_byte - 1`.
+///
+/// This is used when computing inter-item whitespace slices so that we can still "see" a trailing
+/// newline in the whitespace *between* items.
+fn node_end_no_trailing_newline(text: &str, node: Node<'_>) -> usize {
+	let node_text = node.utf8_text(text.as_bytes()).unwrap_or("");
+	if node_text.ends_with('\n') {
+		node.end_byte() - 1
+	} else {
+		node.end_byte()
+	}
 }
 
 /// Parse a `#[path = "..."]` attribute.
@@ -537,38 +569,6 @@ impl PartialOrd for Item<'_> {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
 	}
-}
-
-/// Like `node.end_byte()`, but if the node's text ends with `\n`, return `end_byte - 1`.
-///
-/// This is used when computing inter-item whitespace slices so that we can still "see" a trailing
-/// newline in the whitespace *between* items.
-fn node_end_no_trailing_newline(text: &str, node: Node<'_>) -> usize {
-	let node_text = node.utf8_text(text.as_bytes()).unwrap_or("");
-	if node_text.ends_with('\n') {
-		node.end_byte() - 1
-	} else {
-		node.end_byte()
-	}
-}
-
-/// True if the string contains a blank line, where the middle line may contain whitespace.
-fn has_blank_line(s: &str) -> bool {
-	let bytes = s.as_bytes();
-	let mut i = 0;
-	while i < bytes.len() {
-		if bytes[i] == b'\n' {
-			let mut j = i + 1;
-			while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
-				j += 1;
-			}
-			if j < bytes.len() && bytes[j] == b'\n' {
-				return true;
-			}
-		}
-		i += 1;
-	}
-	false
 }
 
 impl<'a> Module<'a> {
