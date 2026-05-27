@@ -124,6 +124,7 @@ enum Item<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Module<'a> {
 	items: Vec<(bool, Item<'a>)>,
+	is_block: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -580,10 +581,27 @@ impl<'a> Module<'a> {
 		let mut items: Vec<(bool, Item)> = Vec::new();
 		let mut start = None;
 		let mut last = None;
+		let mut is_block = false;
 		if cursor.node().kind() == "{" {
+			is_block = true;
 			last = Some(cursor.node().end_byte());
 			cursor.goto_next_sibling();
 		}
+
+		// Returns the byte offset to use as content start for a node inside a block,
+		// including the leading indentation (tabs/spaces after the last newline).
+		let indent_start = |last_pos: usize, node_start: usize| -> usize {
+			if !is_block {
+				return node_start;
+			}
+			let between = &text[last_pos..node_start];
+			if let Some(nl_pos) = between.rfind('\n') {
+				last_pos + nl_pos + 1
+			} else {
+				node_start
+			}
+		};
+
 		loop {
 			if cursor.node().kind() == "}" {
 				// If we were collecting skipped content (e.g. trailing comments), attach it to the last item.
@@ -606,8 +624,8 @@ impl<'a> Module<'a> {
 				break;
 			}
 			let node = cursor.node();
-			let inbetween =
-				&text[last.unwrap_or(root.start_byte())..start.unwrap_or(node.start_byte())];
+			let last_pos = last.unwrap_or(root.start_byte());
+			let inbetween = &text[last_pos..start.unwrap_or(node.start_byte())];
 			if node.kind() == "empty_statement" {
 				if let Some((_, it)) = items.last_mut() {
 					it.append_content(";");
@@ -619,7 +637,11 @@ impl<'a> Module<'a> {
 				);
 				start = None;
 				last = Some(node_end_no_trailing_newline(text, node));
-			} else if let Some(item) = Item::maybe_item(text, node, start) {
+			} else if let Some(item) = Item::maybe_item(
+				text,
+				node,
+				start.or_else(|| Some(indent_start(last_pos, node.start_byte()))),
+			) {
 				debug_assert!(
 					inbetween.trim().is_empty(),
 					"unexpected skipped content: {:?}",
@@ -630,7 +652,7 @@ impl<'a> Module<'a> {
 				start = None;
 				last = Some(node_end_no_trailing_newline(text, node));
 			} else if start.is_none() {
-				start = Some(node.start_byte());
+				start = Some(indent_start(last_pos, node.start_byte()));
 			}
 			if !cursor.goto_next_sibling() {
 				break;
@@ -651,7 +673,7 @@ impl<'a> Module<'a> {
 			}
 		}
 
-		Self { items }
+		Self { items, is_block }
 	}
 
 	pub fn sort(&mut self) {
@@ -673,7 +695,13 @@ impl Display for Module<'_> {
 		for (newline, item) in &self.items {
 			let is_trailing = matches!(item, Item::Trailing(_));
 			let order = item.item_order();
-			if *newline || (!is_trailing && last.is_some() && last != Some(order)) {
+			if last.is_none() {
+				// First item: inside a block, emit exactly one newline to separate from `{`.
+				// At the top level (source_file) no leading newline is needed.
+				if self.is_block {
+					writeln!(f)?;
+				}
+			} else if *newline || (!is_trailing && last != Some(order)) {
 				writeln!(f)?;
 			}
 			writeln!(f, "{}", item)?;
