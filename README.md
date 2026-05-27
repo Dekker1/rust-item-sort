@@ -33,3 +33,38 @@ cargo item-sort -p my_package
 cargo item-sort --all
 cargo item-sort -- --config-path rustfmt.toml
 ```
+
+## GitHub Action
+
+`rust-item-sort` is available as a GitHub Action that installs the tool and runs `cargo item-sort --check` in your CI pipeline.
+
+```yaml
+- uses: Dekker1/rust-item-sort@main
+```
+
+### Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `version` | Version of `rust-item-sort` to install (e.g. `"0.1.0"`). | `"latest"` |
+| `args` | Extra arguments forwarded to `cargo item-sort --check` (e.g. `"--all"` or `"-p my_crate"`). | `""` |
+| `working-directory` | Directory in which to run the check. | `"."` |
+
+### Examples
+
+Check all packages in a workspace:
+
+```yaml
+- uses: Dekker1/rust-item-sort@main
+  with:
+    args: --all
+```
+
+Pin to a specific version and check a single package:
+
+```yaml
+- uses: Dekker1/rust-item-sort@main
+  with:
+    version: "0.1.1"
+    args: -p my_crate
+```
