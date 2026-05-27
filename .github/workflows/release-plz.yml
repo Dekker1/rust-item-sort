@@ -2,17 +2,18 @@ name: Release-plz
 
 on:
   push:
-    branches:
-      - develop
+    branches: [develop]
 
 jobs:
   # Release unpublished packages.
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'Dekker1' }}
     permissions:
       contents: write
       pull-requests: read
+      id-token: write
     steps:
       - &checkout
         name: Checkout repository
@@ -34,6 +35,7 @@ jobs:
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'Dekker1' }}
     permissions:
       contents: write
       pull-requests: write
