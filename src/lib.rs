@@ -62,6 +62,8 @@
 //! - Not a full Rust name resolver (purely syntactic traversal).
 //! - Does not try to merge/rewrite `use` statements; rustfmt still formats after sorting.
 
+mod sort;
+
 use std::{
 	borrow::Cow,
 	cmp::Ordering,
@@ -71,6 +73,8 @@ use std::{
 };
 
 use tree_sitter::{Node, Parser};
+
+use crate::sort::version_cmp;
 
 /// Controls whether the sorter should only report changes (`Check`) or rewrite files (`Write`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -537,7 +541,7 @@ impl Ord for Item<'_> {
 				Type { name: a, .. } | Trait { name: a, .. },
 				Type { name: b, .. } | Trait { name: b, .. },
 			)
-			| (Func { name: a, .. }, Func { name: b, .. }) => a.cmp(b),
+			| (Func { name: a, .. }, Func { name: b, .. }) => version_cmp(a, b),
 			(Use(_), Use(_))
 			| (MacroInvocation(_), MacroInvocation(_))
 			| (Trailing(_), Trailing(_)) => Ordering::Equal,
@@ -549,13 +553,18 @@ impl Ord for Item<'_> {
 					name: b, trt: t_b, ..
 				},
 			) => {
-				let name_order = a.name.cmp(b.name);
+				let name_order = version_cmp(a.name, b.name);
 				if name_order == Ordering::Equal {
-					let trt_order = t_a.unwrap_or("").cmp(t_b.unwrap_or(""));
+					let trt_order = version_cmp(t_a.unwrap_or(""), t_b.unwrap_or(""));
 					if trt_order == Ordering::Equal {
-						let a_parts = (a.generics.unwrap_or(""), a.reference_type.unwrap_or(""));
-						let b_parts = (b.generics.unwrap_or(""), b.reference_type.unwrap_or(""));
-						a_parts.cmp(&b_parts)
+						version_cmp(a.generics.unwrap_or(""), b.generics.unwrap_or("")).then_with(
+							|| {
+								version_cmp(
+									a.reference_type.unwrap_or(""),
+									b.reference_type.unwrap_or(""),
+								)
+							},
+						)
 					} else {
 						trt_order
 					}
@@ -863,5 +872,35 @@ mod tests {
 		let input = "const Z: i32 = 1;\nconst A: i32 = 2;\n";
 		let out = item_sort_str(input).unwrap();
 		assert!(out.find("const A").unwrap() < out.find("const Z").unwrap());
+	}
+
+	#[test]
+	fn version_sort_numeric_names_in_items() {
+		let input = "const u128: i32 = 1;\nconst u16: i32 = 2;\nconst u8: i32 = 3;\n";
+		let out = item_sort_str(input).unwrap();
+		let p8 = out.find("u8").unwrap();
+		let p16 = out.find("u16").unwrap();
+		let p128 = out.find("u128").unwrap();
+		assert!(p8 < p16 && p16 < p128, "got:\n{out}");
+	}
+
+	#[test]
+	fn version_sort_raw_identifiers_in_items() {
+		// Functions named with raw identifiers should sort by their underlying name. With naive
+		// string sorting `r#async` would come after `client`; under the 2024-edition rule it
+		// comes first.
+		let input = "\
+fn client() {}
+fn r#async() {}
+fn result() {}
+";
+		let out = item_sort_str(input).unwrap();
+		let p_async = out.find("fn r#async").expect("r#async survived parsing");
+		let p_client = out.find("fn client").unwrap();
+		let p_result = out.find("fn result").unwrap();
+		assert!(
+			p_async < p_client && p_client < p_result,
+			"unexpected order:\n{out}"
+		);
 	}
 }
