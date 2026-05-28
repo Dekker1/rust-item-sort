@@ -714,7 +714,7 @@ impl<'a> Module<'a> {
 				_ => {}
 			}
 		}
-		self.items.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+		self.items.sort_by(|a, b| a.1.cmp(&b.1));
 	}
 }
 
