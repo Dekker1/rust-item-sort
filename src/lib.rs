@@ -125,6 +125,8 @@ enum Item<'a> {
 struct Module<'a> {
 	items: Vec<(bool, Item<'a>)>,
 	is_block: bool,
+	/// Original text between `{` and `}` for empty blocks, used to preserve `{\n}` vs `{}`.
+	between_braces: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -582,6 +584,7 @@ impl<'a> Module<'a> {
 		let mut start = None;
 		let mut last = None;
 		let mut is_block = false;
+		let mut between_braces: &'a str = "";
 		if cursor.node().kind() == "{" {
 			is_block = true;
 			last = Some(cursor.node().end_byte());
@@ -619,6 +622,19 @@ impl<'a> Module<'a> {
 						it.append_content(tail);
 					}
 					start = None;
+				}
+				// For empty blocks, remember what was between `{` and `}` so we can
+				// reproduce `{\n}` vs `{}` faithfully instead of always emitting `{}`.
+				if items.is_empty() && is_block {
+					let close_start = cursor.node().start_byte();
+					let last_pos = last.unwrap_or(root.start_byte());
+					let between = &text[last_pos..close_start];
+					let indent_before_close = if let Some(nl_pos) = between.rfind('\n') {
+						last_pos + nl_pos + 1
+					} else {
+						close_start
+					};
+					between_braces = &text[last_pos..indent_before_close];
 				}
 				assert!(!cursor.goto_next_sibling());
 				break;
@@ -673,7 +689,11 @@ impl<'a> Module<'a> {
 			}
 		}
 
-		Self { items, is_block }
+		Self {
+			items,
+			is_block,
+			between_braces,
+		}
 	}
 
 	pub fn sort(&mut self) {
@@ -691,6 +711,10 @@ impl<'a> Module<'a> {
 
 impl Display for Module<'_> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		// Empty block: reproduce the original whitespace between `{` and `}` verbatim.
+		if self.is_block && self.items.is_empty() {
+			return write!(f, "{}", self.between_braces);
+		}
 		let mut last = None;
 		for (newline, item) in &self.items {
 			let is_trailing = matches!(item, Item::Trailing(_));
@@ -704,7 +728,13 @@ impl Display for Module<'_> {
 			} else if *newline || (!is_trailing && last != Some(order)) {
 				writeln!(f)?;
 			}
-			writeln!(f, "{}", item)?;
+			// Trailing items (e.g. mdBook anchor comments) already end with `\n`; using
+			// `write!` avoids adding a second newline that would grow on every write pass.
+			if is_trailing {
+				write!(f, "{}", item)?;
+			} else {
+				writeln!(f, "{}", item)?;
+			}
 			if !is_trailing {
 				last = Some(order);
 			}
@@ -730,14 +760,38 @@ impl<'a> SortableContent<'a> {
 		let mut cursor = body.walk();
 		cursor.goto_first_child();
 		assert_eq!(cursor.node().kind(), "{");
-		let before = Cow::Borrowed(&text[start..cursor.node().end_byte()]);
+		let open_end = cursor.node().end_byte();
+		let before = Cow::Borrowed(&text[start..open_end]);
 
 		cursor.goto_parent();
 		cursor.goto_last_child();
 		assert_eq!(cursor.node().kind(), "}");
-		let after = Cow::Borrowed(&text[cursor.node().start_byte()..node.end_byte()]);
+		let close_start = cursor.node().start_byte();
 
+		// Build the inner module first so we can inspect whether it has trailing content.
 		let inner = Module::from_node(text, body);
+
+		// `after` normally starts at the `}` token.  When there is no trailing content the
+		// whitespace between the last item and `}` (typically `\n\t`) is not captured by any
+		// item, so we extend `after` backwards to include the indentation before `}`.
+		// When trailing content IS present it already includes that indentation, so we leave
+		// `after` starting at `}` to avoid duplication.
+		let has_trailing = inner
+			.items
+			.last()
+			.is_some_and(|(_, it)| matches!(it, Item::Trailing(_)));
+		let after_start = if !has_trailing {
+			let between = &text[open_end..close_start];
+			if let Some(nl_pos) = between.rfind('\n') {
+				open_end + nl_pos + 1
+			} else {
+				close_start
+			}
+		} else {
+			close_start
+		};
+		let after = Cow::Borrowed(&text[after_start..node.end_byte()]);
+
 		Self {
 			before,
 			inner,
