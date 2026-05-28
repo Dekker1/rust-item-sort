@@ -54,7 +54,7 @@ jobs:
           # token to the remote URL for the push.
           remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for t in "v${major}" "v${major}.${minor}"; do
-            git tag -f "$t" "$tag"
+            git tag -f "$t" "$GITHUB_SHA"
             git push -f "$remote_url" "refs/tags/${t}"
           done
 
