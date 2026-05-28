@@ -25,11 +25,38 @@ jobs:
         name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Maintain floating `vMAJOR` and `vMAJOR.MINOR` tags so consumers of the
+      # GitHub Action can pin to a major or minor line and receive bug fixes
+      # automatically. The exact `vMAJOR.MINOR.PATCH` tag is created by
+      # release-plz itself.
+      - name: Update floating major/minor tags
+        if: ${{ steps.release-plz.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          set -euo pipefail
+          tag=$(echo "$RELEASES" | jq -r '.[0].tag')
+          ver=${tag#v}
+          major=${ver%%.*}
+          rest=${ver#*.}
+          minor=${rest%%.*}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # The checkout step used persist-credentials: false, so attach the
+          # token to the remote URL for the push.
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          for t in "v${major}" "v${major}.${minor}"; do
+            git tag -f "$t" "$tag"
+            git push -f "$remote_url" "refs/tags/${t}"
+          done
 
   # Create a PR with the new versions and changelog, preparing the next release.
   release-plz-pr:
