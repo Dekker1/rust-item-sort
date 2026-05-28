@@ -1,6 +1,6 @@
 [package]
 name = "rust-item-sort"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "A tool (and cargo subcommand) to sort/reorder Rust items in an opinionated way."
 authors = ["Jip J. Dekker <jip@dekker.one>"]
