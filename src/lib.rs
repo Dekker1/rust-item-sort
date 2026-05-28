@@ -42,9 +42,10 @@
 //! 4. `const` / `static`
 //! 5. types (`struct`/`enum`/`type`/...) and `trait`
 //! 6. functions
-//! 7. impl blocks
-//! 8. macro invocations
-//! 9. inline modules (`mod foo { ... }`)
+//! 7. `extern "ABI" { ... }` blocks (foreign declarations)
+//! 8. impl blocks
+//! 9. macro invocations
+//! 10. inline modules (`mod foo { ... }`)
 //!
 //! Within a group, most items are sorted lexicographically by name.
 //!
@@ -117,6 +118,13 @@ enum Item<'a> {
 		content: SortableContent<'a>,
 	},
 	MacroInvocation(Cow<'a, str>),
+	/// An `extern "ABI" { ... }` block. Its body is a `declaration_list` of foreign items
+	/// (bodyless `fn` signatures and `static`s), which we sort recursively just like a module body.
+	/// Multiple blocks are ordered by their ABI string.
+	ForeignMod {
+		abi: Option<&'a str>,
+		content: SortableContent<'a>,
+	},
 	Mod {
 		name: &'a str,
 		content: SortableContent<'a>,
@@ -401,7 +409,10 @@ impl<'a> Item<'a> {
 			| Item::Trailing(content) => {
 				*content = Cow::Owned(format!("{}{}", content, text));
 			}
-			Item::Impl { .. } | Item::Mod { .. } | Item::Trait { .. } => {
+			Item::ForeignMod { .. }
+			| Item::Impl { .. }
+			| Item::Mod { .. }
+			| Item::Trait { .. } => {
 				// Cannot add content to these items
 			}
 		}
@@ -417,9 +428,10 @@ impl<'a> Item<'a> {
 			Item::Type { .. } => 5,
 			Item::Trait { .. } => 5,
 			Item::Func { .. } => 6,
-			Item::Impl { .. } => 7,
-			Item::MacroInvocation(_) => 8,
-			Item::Mod { .. } => 9,
+			Item::ForeignMod { .. } => 7,
+			Item::Impl { .. } => 8,
+			Item::MacroInvocation(_) => 9,
+			Item::Mod { .. } => 10,
 			Item::Trailing(_) => 255,
 		}
 	}
@@ -483,7 +495,22 @@ impl<'a> Item<'a> {
 				let name = get_field_str("name").unwrap();
 				Some(Self::Macro { name, content })
 			}
-			"macro_invocation" => Some(Self::MacroInvocation(content)),
+			"foreign_mod_item" => {
+				// The ABI lives in the `extern_modifier` child (e.g. `extern "C"`); use the
+				// string literal (`"C"`) as the sort key, falling back to `None`.
+				let abi = node
+					.child(0)
+					.filter(|n| n.kind() == "extern_modifier")
+					.and_then(|m| {
+						let mut c = m.walk();
+						m.children(&mut c)
+							.find(|n| n.kind() == "string_literal")
+							.map(|s| s.utf8_text(text.as_bytes()).unwrap())
+					});
+				let content = SortableContent::within_node(text, node, Some(start), "body");
+				Some(Self::ForeignMod { abi, content })
+			}
+			"expression_statement" | "macro_invocation" => Some(Self::MacroInvocation(content)),
 			"mod_item" => {
 				let name = get_field_str("name").unwrap();
 				if node.child_by_field_name("body").is_some() {
@@ -517,6 +544,7 @@ impl Display for Item<'_> {
 			| Item::Trailing(content) => write!(f, "{content}"),
 			Item::Mod { content, .. }
 			| Item::Impl { content, .. }
+			| Item::ForeignMod { content, .. }
 			| Item::Trait { content, .. } => write!(f, "{content}"),
 		}
 	}
@@ -545,6 +573,9 @@ impl Ord for Item<'_> {
 			(Use(_), Use(_))
 			| (MacroInvocation(_), MacroInvocation(_))
 			| (Trailing(_), Trailing(_)) => Ordering::Equal,
+			(ForeignMod { abi: a, .. }, ForeignMod { abi: b, .. }) => {
+				version_cmp(a.unwrap_or(""), b.unwrap_or(""))
+			}
 			(
 				Impl {
 					name: a, trt: t_a, ..
@@ -710,6 +741,7 @@ impl<'a> Module<'a> {
 			match &mut it.1 {
 				Item::Mod { content, .. }
 				| Item::Impl { content, .. }
+				| Item::ForeignMod { content, .. }
 				| Item::Trait { content, .. } => content.sort(),
 				_ => {}
 			}
@@ -847,13 +879,16 @@ impl<'a> TypeIdent<'a> {
 				ty.reference_type = Some(reference_str);
 				ty
 			}
-			"type_identifier" | "scoped_type_identifier" | "primitive_type" | "bounded_type" => {
-				Self {
-					name: node.utf8_text(text.as_bytes()).unwrap(),
-					generics: None,
-					reference_type: None,
-				}
-			}
+			"type_identifier"
+			| "scoped_type_identifier"
+			| "primitive_type"
+			| "bounded_type"
+			| "tuple_type"
+			| "unit_type" => Self {
+				name: node.utf8_text(text.as_bytes()).unwrap(),
+				generics: None,
+				reference_type: None,
+			},
 			_ => panic!(
 				"invalid type identifier node: {}, `{}`",
 				node.kind(),
@@ -882,6 +917,67 @@ mod tests {
 		let p16 = out.find("u16").unwrap();
 		let p128 = out.find("u128").unwrap();
 		assert!(p8 < p16 && p16 < p128, "got:\n{out}");
+	}
+
+	#[test]
+	fn sorts_extern_block_contents() {
+		// The body of an `extern` block is a list of declarations and is sorted recursively
+		// (statics before fns; names version-sorted within each group).
+		let input = "\
+extern \"C\" {
+\tfn z_func() -> *const ();
+\tfn a_func() -> *const ();
+\tstatic THING: i32;
+}
+";
+		let out = item_sort_str(input).unwrap();
+		let p_static = out.find("static THING").unwrap();
+		let p_a = out.find("fn a_func").unwrap();
+		let p_z = out.find("fn z_func").unwrap();
+		assert!(p_static < p_a && p_a < p_z, "got:\n{out}");
+	}
+
+	#[test]
+	fn extern_block_placement_and_abi_order() {
+		let input = "\
+impl Foo {}
+
+fn a_func() {}
+
+extern \"Rust\" {
+\tfn rust_fn();
+}
+
+extern \"C\" {
+\tfn c_fn();
+}
+";
+		let out = item_sort_str(input).unwrap();
+		let p_func = out.find("fn a_func").unwrap();
+		let p_c = out.find("extern \"C\"").unwrap();
+		let p_rust = out.find("extern \"Rust\"").unwrap();
+		let p_impl = out.find("impl Foo").unwrap();
+		// functions < extern blocks < impl; extern blocks ordered by ABI ("C" < "Rust").
+		assert!(
+			p_func < p_c && p_c < p_rust && p_rust < p_impl,
+			"got:\n{out}"
+		);
+	}
+
+	#[test]
+	fn preserves_top_level_macro_statement() {
+		// `include!(...)` at the top level is parsed as an `expression_statement` by tree-sitter,
+		// not a `macro_invocation` — it must still be preserved.
+		let input = "use a::b;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));\n";
+		let out = item_sort_str(input).unwrap();
+		assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));"));
+	}
+
+	#[test]
+	fn impl_for_unit_type() {
+		let input = "trait Marker {}\nimpl Marker for () {}\n";
+		let out = item_sort_str(input).unwrap();
+		assert!(out.contains("impl Marker for ()"));
 	}
 
 	#[test]
